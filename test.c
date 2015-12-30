@@ -18,6 +18,7 @@ int main(void) {
 	uint16_t l4src = htons(123);
 	uint16_t l4dst = htons(456);
 
-	printf("%d\n",INSERT_RULE(src_addr,dst_addr,dscp,l4src,l4dst));
+	//printf("%d\n",INSERT_RULE(src_addr,dst_addr,dscp,l4src,l4dst));
+	printf("%d\n",DELETE_RULE(src_addr,dst_addr,dscp,l4src,l4dst));
 	return 0;
 }
