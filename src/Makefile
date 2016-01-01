@@ -22,6 +22,9 @@ debug:
 test_hash:util.o
 	${CC} -g -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS}  util.o test/test_hash.c -o hash_test
 	./hash_test
+test_iptc:$(objects)
+	${CC} -g -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS}  iptc.o test/test_iptc.c -o iptc_test
+	./iptc_test
 clean:
 	rm -f *.o
 	rm -f main

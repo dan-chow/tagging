@@ -2,12 +2,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <assert.h>
 #include <time.h>
 #include <signal.h>
+
 #include "log.h"
 #include "common.h"
 #include <libnetfilter_conntrack/libnetfilter_conntrack.h>
 #include <libnetfilter_conntrack/libnetfilter_conntrack_tcp.h>
+#include "iptc.h"
+
+#define TCP_PROTO  6
+#define LEVEL_1   (1024*1024)     //1MB
+#define LEVEL_2   (20*1024*1024)  //20MB
+
+#define DSCP_EF     46            //0x2e, This is the default tag
+#define DSCP_PHB    16            //0x10
+#define DSCP_BE     0             //0x00 Best-effor service
+
+
 /*I don't know why that I only get zero when directly get l4dst, so I temporially get it through __snprintf_proto
 //What a strang code
 static void get_l4port_tcp(uint16_t *l4src, uint16_t *l4dst, const struct __nfct_tuple *tuple) {
@@ -80,6 +93,49 @@ static inline uint64_t get_repl_bytes(const struct nf_conntrack *ct) {
 	return nfct_get_attr_u64(ct,ATTR_REPL_COUNTER_BYTES);
 }
 
+/*before add rule, we must remove previous rules installed*/
+static int add_rule(struct HashNode *pnode, const struct Flow *f, uint8_t new_tag) {
+	
+	
+	if(new_tag == DSCP_EF) 
+		return 0; //This is the default tagging, we don't need insert rules
+	
+	if(pnode == NULL) {
+		/*previous tag is DSCP_EF(default)*/
+		/*add flow to hash table*/
+		if(insert_flow(f,0/*we care about no bytes*/,new_tag,time((time_t*)NULL)) == NULL) {
+			LOG_ERR("inserting flow error\n");
+			return -1;
+		}
+		/*insert iptables rule*/
+		if(INSERT_RULE(f->src, f->dst, new_tag, f->l4src,f->l4dst) != 0 ) {
+			LOG_ERR("inserting new rule error\n");
+			return -1;
+		}
+
+	}else if(new_tag != pnode->dscp) {
+		/*first, we need to delete previous one, and then add a new one*/
+		
+		if(DELETE_RULE(pnode->key.flow.src, pnode->key.flow.dst, pnode->dscp, pnode->key.flow.l4src, pnode->key.flow.l4dst) != 0) {
+			LOG_ERR("delete previous rule error\n");
+			return -1;
+		}
+		/*Second, add new one*/
+
+		if(INSERT_RULE(pnode->key.flow.src, pnode->key.flow.dst, new_tag, pnode->key.flow.l4src, pnode->key.flow.l4dst) != 0 ) {
+			LOG_ERR("inserting new rule error\n");
+			return -1;
+		}
+		update_flow(pnode,new_tag,0/*We don't care about the bytes*/, time((time_t*)NULL));/*must be succeed*/
+
+	}/*else new_tag == pnode->dscp, do nothing*/
+
+
+	return 0;
+
+}
+
+
 const int interval = 5000; //every five seconds
 int conti = 1;
 
@@ -90,16 +146,39 @@ void sig_term(int signo) {
 	}
 }
 
-#define TCP_PROTO 6
-#define LEVEL_1   (1024*1024)  //1MB
-#define LEVEL_2   (20*1024*1024)
+/*remove flows from hash table, and delte rules in mangle table*/
+static void clean_up() {
+	struct HashNode *buf[512];
+	uint32_t num;
+	uint32_t i;
+	struct HashNode *p;
+	while(1) {
+		num = remove_all_flows(buf,512);
 
+		for(i = 0; i < num; ++i ) {
+			p = buf[i];
+			//whatever successful or not
+			DELETE_RULE(p->key.flow.src, p->key.flow.dst, p->dscp, p->key.flow.l4src, p->key.flow.l4dst); //
+			free_node(p);
+		}
+
+
+		if(num < 512)
+			break;
+	}
+
+
+
+
+}
+
+ 
 static int cb(enum nf_conntrack_msg_type type,
 		struct nf_conntrack *ct,
 		void *data
 	    ) {
 	char buf[1024];
-	LOG_DEBUG("begin in cb\n");
+	//LOG_DEBUG("begin in cb\n");
 	uint8_t proto = get_l4proto(ct);
 	uint8_t state = get_tcp_state(ct);
 	/*only attention to established TCP connections*/
@@ -111,22 +190,24 @@ static int cb(enum nf_conntrack_msg_type type,
 			break;
 		default:
 			return NFCT_CB_CONTINUE;
-			break;
 	};
 	
 	LOG_DEBUG("established tcp connections got!!\n");
 
 	struct in_addr orig_src = {.s_addr = get_orig_ipv4_src(ct)};
 	struct in_addr orig_dst = {.s_addr = get_orig_ipv4_dst(ct)};
-	uint16_t orig_l4src = ntohs(get_orig_l4src(ct));
-	uint16_t orig_l4dst = ntohs(get_orig_l4dst(ct));
+	uint16_t orig_l4src = get_orig_l4src(ct);
+	uint16_t orig_l4dst = get_orig_l4dst(ct);
 	uint64_t orig_bytes = get_orig_bytes(ct);
 	
 	struct in_addr repl_src = {.s_addr = get_repl_ipv4_src(ct)};
 	struct in_addr repl_dst = {.s_addr = get_repl_ipv4_dst(ct)};
-	uint16_t repl_l4src = ntohs(get_repl_l4src(ct));
-	uint16_t repl_l4dst = ntohs(get_repl_l4dst(ct));
+	uint16_t repl_l4src = get_repl_l4src(ct);
+	uint16_t repl_l4dst = get_repl_l4dst(ct);
 	uint64_t repl_bytes = get_repl_bytes(ct);
+
+	uint64_t total_bytes = repl_bytes + orig_bytes;
+
 	LOG_DEBUG("got neccessary data\n");
 	
 	struct Flow orig_flow  = {
@@ -138,7 +219,29 @@ static int cb(enum nf_conntrack_msg_type type,
 	};
 	struct HashNode *prev = lookup_flow(&orig_flow);
 
+	if(total_bytes < LEVEL_1) 
+	        /*mice flow */
+		return NFCT_CB_CONTINUE;
+
+	else if(total_bytes > LEVEL_2) {
+		/*  bytes > LEVEL_2 */
+		/*==NULL, unlikely*/
+		if(add_rule(prev,&orig_flow,DSCP_BE) != 0) {
+
+			return NFCT_CB_STOP;
+		}
+	}else {
+		/*LEVEL_1 < bytes < LEVEL_2*/
+		/*==NULL, unlikely*/
+		if(add_rule(prev,&orig_flow, DSCP_PHB) != 0) {
+
+			return NFCT_CB_STOP;
+		}
+	}
+	printf("orig flow:");
 	printf_flow(&orig_flow);
+	//printf("reply flow:");
+	//printf_flow(&repl_flow);
 
 	
 
@@ -211,6 +314,8 @@ int main(void) {
 		LOG_ERR("nfct_open");
 		return -1;
 	}
+	/*inital buffers*/
+	init();
 	//Filter dosen't work, I don't know why. So I leave it alone temporially.
 	/*
 	struct nfct_filter *filter = create_own_filter();
@@ -255,7 +360,8 @@ int main(void) {
 	 * nfct_filter_detach(nfct_fd(h));
 	 * nfct_filter_destroy(filter);
 	 */
-
+	/* we need to delete all rules inserted, according to the content in hash table*/
+	clean_up();
 	//sleep(5);
 	nfct_close(h);
 	//ret = -1 ? exit(EXIT_FAILURE): exit(EXIT_SUCCESS);

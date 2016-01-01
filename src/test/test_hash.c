@@ -44,25 +44,7 @@ int main(void) {
 	inet_aton("192.168.111.1",&flow2.dst);
 
 	init();
-	printf("insert result=%d\n",insert_flow(&flow,time((time_t*)NULL)));
-	printf("insert result=%d\n",lookup_flow(&flow));
-	printf("insert result=%d\n",insert_flow(&flow2,time((time_t*)NULL)));
-	printf("insert result=%d\n",lookup_flow(&flow2));
-	printf_flow(&flow2);
-	printf_flow(&flow);
-	sleep(5);
-	printf("insert result=%d\n",insert_flow(&flow,time((time_t*)NULL)));
-	printf("insert result=%d\n",lookup_flow(&flow));
-	sleep(5);
-	printf("start iterate\n");
-
-	iterate_flow();
-	
-	int num = remove_flows(arr,32,5,time((time_t*)NULL));
-	LOG_DEBUG("DEBUG-TEST: REMOVE %d flows\n",num);
-	printf("delete another\n");
-	
-	num = remove_flows(arr,32,5,time((time_t*)NULL));
-	LOG_DEBUG("DEBUG-TEST: REMOVE %d flows\n",num);
+	printf("insert result=%d\n",insert_flow(&flow,123,10,time((time_t*)NULL)));
+	printf("insert result=%p\n",lookup_flow(&flow));
 	return 0;
 }

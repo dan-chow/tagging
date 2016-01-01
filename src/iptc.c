@@ -16,6 +16,10 @@
 #include "iptc.h"
 #include <linux/netfilter/xt_DSCP.h> /*for DSCP info*/
 
+#define INSERT_FIRST 0
+#define DELETE_FIRST 1
+
+
 int insert_rule(const char *table,
 		const char *chain,
 		struct in_addr src_addr,
@@ -32,7 +36,7 @@ int insert_rule(const char *table,
 	struct iptc_handle *handle;
 	int ret = 1;
 	uint32_t src = src_addr.s_addr;
-	uint32_t dst = src_addr.s_addr;
+	uint32_t dst = dst_addr.s_addr;
 
         struct ipt_entry *entry;
 	struct ipt_entry_match *match_proto; /*proto and l4port*/
@@ -101,7 +105,7 @@ int insert_rule(const char *table,
 		return -1;
 	}
 
-	ret = iptc_insert_entry(chain,entry,0,handle);
+	ret = iptc_insert_entry(chain,entry,INSERT_FIRST,handle);
 	if(!ret) {
 		LOG_ERR("Error: insert a rule, %s\n",iptc_strerror(errno));
 		return -1;
