@@ -26,7 +26,7 @@ static struct HashNode* get_node() {
 		return NULL;
 
 	pnode = head_node.key.next;
-	head_node.key.next = head_node.key.next->key.next;
+	head_node.key.next = pnode->key.next;
 
 	return pnode;
 }
@@ -43,7 +43,7 @@ void free_node(struct HashNode* node) {
 /*automatically add or update*/
 struct HashNode* insert_flow(const struct Flow *flow,uint64_t bytes,uint8_t dscp,time_t t) {
 	struct HashNode *pnode = NULL;
-	HASH_FIND_INT(flows,flow,pnode);
+	HASH_FIND(hh,flows,flow,sizeof(struct Flow),pnode);
 	if(NULL == pnode) {
 		pnode = get_node();
 		if(pnode == NULL)
@@ -51,11 +51,13 @@ struct HashNode* insert_flow(const struct Flow *flow,uint64_t bytes,uint8_t dscp
 		memcpy(&pnode->key.flow,flow,sizeof(struct Flow));
 		pnode->recent = t;
 		pnode->bytes = bytes;
+		pnode->dscp = dscp;
 
-		HASH_ADD_INT(flows,key,pnode);
+		HASH_ADD(hh,flows,key,sizeof(union HashKey),pnode);
 	}else {
 		pnode->recent = t;
 	}
+	printf("insert_flow pnode=%p\n",pnode);
 
 	return pnode;
 }
@@ -63,7 +65,7 @@ struct HashNode* insert_flow(const struct Flow *flow,uint64_t bytes,uint8_t dscp
 /*lookup */
 struct HashNode *lookup_flow(struct Flow *flow) {
 	struct HashNode *pnode = NULL;
-	HASH_FIND_INT(flows,flow,pnode);
+	HASH_FIND(hh,flows,flow,sizeof(struct Flow),pnode);
 	return pnode;
 }
 /*delete, bounded by a number to avoid a long delete procedure
@@ -77,7 +79,7 @@ struct HashNode *lookup_flow(struct Flow *flow) {
  *@return:the number of failure of deletions
  * */
 
-int remove_flows(struct HashNode *nodes[], int N, uint32_t interval, time_t now) {
+static int _remove_flows(struct HashNode *nodes[], int N, uint32_t interval, time_t now) {
 	struct HashNode *pnode = NULL, *tmp;
 	int i = 0;
 
@@ -97,6 +99,40 @@ int remove_flows(struct HashNode *nodes[], int N, uint32_t interval, time_t now)
 	}
 	return i;
 }
+/*N means the maximum number of flows during a single iteration: is Aligned to 128
+ * return the nubmer revmove in reality
+ * */
+#define MAX_NUM_ONCE 128
+int remove_flows(int N, uint32_t interval, time_t now) {
+	struct HashNode *nodes[MAX_NUM_ONCE];
+	struct HashNode *p;
+	int i = 0;
+	int j = 0;
+	int success = 1;
+	int real_num = 0;
+	int total = 0;
+	int times = N / MAX_NUM_ONCE;
+	times = (N % MAX_NUM_ONCE == 0) ? (times) : (times+1);
+
+	for(i = 0; i < times && success == 1; ++i) {
+		real_num = _remove_flows(nodes,MAX_NUM_ONCE,interval,now);
+		total += real_num;
+
+		for(j = 0; j < real_num; ++j) {
+			p = nodes[j];
+			if(DELETE_RULE(p->key.flow.src, p->key.flow.dst, p->dscp, p->key.flow.l4src, p->key.flow.l4dst) != 0)
+				success = -1;
+			LOG_INFO("remove_flows(delete rule):");
+			printf_flow(&p->key.flow);
+			free_node(p);
+		}
+	}
+	return success  ? total : 0- total;
+	
+
+}
+
+
 /*when return value is zero shows that all hashnodes have been removed
  * */
 uint32_t remove_all_flows(struct HashNode *nodes[], int N ) {

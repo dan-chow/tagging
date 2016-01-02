@@ -25,7 +25,6 @@ int main(void) {
 		printf("%s",ms->id);
 	}*/
 
-	struct HashNode arr[32];
 
 	struct Flow flow,flow2;
 	flow.l4src = htons(123);
@@ -39,12 +38,16 @@ int main(void) {
 	printf("dst=%s\n",inet_ntoa(flow.dst));
 
 	//memcpy(&flow2,&flow,sizeof(struct Flow));
-
-	inet_aton("192.168.121.2",&flow2.src);
-	inet_aton("192.168.111.1",&flow2.dst);
-
 	init();
-	printf("insert result=%d\n",insert_flow(&flow,123,10,time((time_t*)NULL)));
-	printf("insert result=%p\n",lookup_flow(&flow));
+
+	printf("insert result=%p\n",insert_flow(&flow,123,10,time((time_t*)NULL)));
+	inet_aton("192.168.131.1",&flow.dst);
+
+	printf("First lookup result=%p\n",lookup_flow(&flow));
+	
+	printf("insert result=%p\n",insert_flow(&flow,123,10,time((time_t*)NULL)));
+	inet_aton("192.168.0.1",&flow.src);
+	
+	printf("lookup result=%p\n",lookup_flow(&flow));
 	return 0;
 }

@@ -16,7 +16,7 @@ util.o:
 #all1:
 #	${CC} -I ${INCLUDEDIR} /usr/lib64/libnetfilter_conntrack.so /lib64/libiptc.so.0-1.4.7 -L ${LIBDIR} dump.c iptc.c -o dump
 debug:
-	${CC} -g -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS}  $(objects) -o main
+	${CC} -g -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS} iptc.c dump.c util.c -o main
 
 
 test_hash:util.o
@@ -29,3 +29,4 @@ clean:
 	rm -f *.o
 	rm -f main
 	rm -f hash_test
+	rm -f iptc_test

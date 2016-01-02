@@ -16,9 +16,199 @@
 #include "iptc.h"
 #include <linux/netfilter/xt_DSCP.h> /*for DSCP info*/
 
-#define INSERT_FIRST 0
+#define FIRST_FOR_EF  0 
+#define INSERT_FIRST 1 //0 is for 0x2e
 #define DELETE_FIRST 1
 
+#define SIZE_IPT_ENTRY            (IPT_ALIGN(sizeof(struct ipt_entry)))
+#define SIZE_IPT_ENTRY_MATCH      (IPT_ALIGN(sizeof(struct ipt_entry_match)))
+#define SIZE_IPT_ENTRY_TARGET	  (IPT_ALIGN(sizeof(struct ipt_entry_target)))
+#define SIZE_IPT_TCP	          (IPT_ALIGN(sizeof(struct ipt_tcp)))
+#define SIZE_IPT_DSCP_INFO	  (IPT_ALIGN(sizeof(struct xt_DSCP_info)))
+
+#define TOTAL_SIZE (SIZE_IPT_ENTRY + SIZE_IPT_ENTRY_MATCH + SIZE_IPT_ENTRY_TARGET + SIZE_IPT_TCP + SIZE_IPT_DSCP_INFO)
+
+/*For simplicity, inserting default rule separeates from insert_rule.....*/
+int rule_init() {
+#define MAXLEN 512
+
+	char buf[MAXLEN];
+	struct iptc_handle *handle;
+	int ret = 1;
+	uint32_t src = 0;
+	uint32_t dst = 0;
+
+        struct ipt_entry *entry;
+	struct ipt_entry_match *match_proto; /*proto and l4port*/
+	struct ipt_entry_target *target;
+	//struct ipt_tcp *tcpinfo;
+	struct xt_DSCP_info *dscp_info; 
+	
+	uint32_t size_ipt_entry, size_ipt_entry_match, size_ipt_entry_target,size_ipt_dscp_info;
+	size_ipt_entry = SIZE_IPT_ENTRY;//IPT_ALIGN(sizeof(struct ipt_entry));
+	size_ipt_entry_match = SIZE_IPT_ENTRY_MATCH;//IPT_ALIGN(sizeof(struct ipt_entry_match));
+	size_ipt_entry_target = SIZE_IPT_ENTRY_TARGET;//IPT_ALIGN(sizeof(struct ipt_entry_target));
+	//size_ipt_tcp = IPT_ALIGN(sizeof(struct ipt_tcp));
+	size_ipt_dscp_info = SIZE_IPT_DSCP_INFO;//IPT_ALIGN(sizeof(struct xt_DSCP_info));
+
+	uint32_t total_size = size_ipt_entry + size_ipt_entry_target + size_ipt_dscp_info;
+	assert(total_size < MAXLEN);
+	
+
+	memset(buf,'\0',sizeof(buf));
+
+	/*entry*/
+	entry = (struct ipt_entry*)buf;
+	
+	entry->target_offset = size_ipt_entry ;
+	entry->next_offset = total_size;
+	/*IPv4 address*/
+	entry->ip.src.s_addr = src; /*default, mask all*/
+	entry->ip.smsk.s_addr = 0x0; 
+
+	entry->ip.dst.s_addr = dst;
+	entry->ip.dmsk.s_addr = 0x0; 
+	
+	entry->ip.proto = IPPROTO_TCP;
+
+	/*match proto*/
+	//match_proto = (struct ipt_entry_match*) entry->elems;
+	
+	//match_proto->u.match_size = size_ipt_entry_match;
+	//strcpy(match_proto->u.user.name,"tcp");
+
+	/*tcp port, attention the order of bytes*/
+	//tcpinfo = (struct ipt_tcp*)match_proto->data;
+
+	//tcpinfo->spts[0] = ntohs(l4src);
+	//tcpinfo->spts[1] = ntohs(l4src);
+	//tcpinfo->dpts[0] = ntohs(l4dst);
+	//tcpinfo->dpts[1] = ntohs(l4dst);
+
+	/*target*/
+	target = (struct ipt_entry_target*)(entry->elems);
+	
+	target->u.target_size = size_ipt_entry_target + size_ipt_dscp_info;
+	strcpy(target->u.user.name, "DSCP");
+	
+	dscp_info = (struct xt_DSCP_info*) target->data;
+
+	dscp_info->dscp = 46; //magic number:DSCP_EF
+	
+	
+	handle = iptc_init("mangle");
+	if(!handle) {
+		LOG_ERR("rule_init(ERR):failed to invoke iptc_init");
+		return -1;
+	}
+
+	ret = iptc_insert_entry("POSTROUTING",entry,FIRST_FOR_EF,handle);
+	//ret = iptc_append_entry("POSTROUTING",entry,handle);
+	if(!ret) {
+		LOG_ERR("rule_init(ERR): insert a rule, %s\n",iptc_strerror(errno));
+		return -1;
+	}
+
+	ret = iptc_commit(handle);
+
+	if(!ret) {
+		LOG_ERR("rule_init(ERR): Commit, %s\n",iptc_strerror(errno));
+		return -1;
+	}
+
+	return 0;
+
+
+}
+int remove_default_rule() {
+#define MAXLEN 512
+
+	char buf[MAXLEN];
+	struct iptc_handle *handle;
+	int ret = 1;
+	uint32_t src = 0;
+	uint32_t dst = 0;
+
+        struct ipt_entry *entry;
+	struct ipt_entry_match *match_proto; /*proto and l4port*/
+	struct ipt_entry_target *target;
+	//struct ipt_tcp *tcpinfo;
+	struct xt_DSCP_info *dscp_info; 
+	
+	uint32_t size_ipt_entry, size_ipt_entry_match, size_ipt_entry_target,size_ipt_dscp_info;
+	size_ipt_entry = SIZE_IPT_ENTRY;//IPT_ALIGN(sizeof(struct ipt_entry));
+	size_ipt_entry_match = SIZE_IPT_ENTRY_MATCH;//IPT_ALIGN(sizeof(struct ipt_entry_match));
+	size_ipt_entry_target = SIZE_IPT_ENTRY_TARGET;//IPT_ALIGN(sizeof(struct ipt_entry_target));
+	//size_ipt_tcp = IPT_ALIGN(sizeof(struct ipt_tcp));
+	size_ipt_dscp_info = SIZE_IPT_DSCP_INFO;//IPT_ALIGN(sizeof(struct xt_DSCP_info));
+
+	uint32_t total_size = size_ipt_entry + size_ipt_entry_target + size_ipt_dscp_info;
+	assert(total_size < MAXLEN);
+	
+
+	memset(buf,'\0',sizeof(buf));
+
+	/*entry*/
+	entry = (struct ipt_entry*)buf;
+	
+	entry->target_offset = size_ipt_entry ;
+	entry->next_offset = total_size;
+	/*IPv4 address*/
+	entry->ip.src.s_addr = src; /*default, mask all*/
+	entry->ip.smsk.s_addr = 0x0; 
+
+	entry->ip.dst.s_addr = dst;
+	entry->ip.dmsk.s_addr = 0x0; 
+	
+	entry->ip.proto = IPPROTO_TCP;
+
+	/*match proto*/
+	//match_proto = (struct ipt_entry_match*) entry->elems;
+	
+	//match_proto->u.match_size = size_ipt_entry_match;
+	//strcpy(match_proto->u.user.name,"tcp");
+
+	/*tcp port, attention the order of bytes*/
+	//tcpinfo = (struct ipt_tcp*)match_proto->data;
+
+	//tcpinfo->spts[0] = ntohs(l4src);
+	//tcpinfo->spts[1] = ntohs(l4src);
+	//tcpinfo->dpts[0] = ntohs(l4dst);
+	//tcpinfo->dpts[1] = ntohs(l4dst);
+
+	/*target*/
+	target = (struct ipt_entry_target*)(entry->elems);
+	
+	target->u.target_size = size_ipt_entry_target + size_ipt_dscp_info;
+	strcpy(target->u.user.name, "DSCP");
+	
+	dscp_info = (struct xt_DSCP_info*) target->data;
+
+	dscp_info->dscp = DSCP_EF; //magic number:DSCP_EF
+	
+	unsigned char matchmask[SIZE_IPT_ENTRY + SIZE_IPT_ENTRY_TARGET + SIZE_IPT_DSCP_INFO];
+
+	handle = iptc_init("mangle");
+	if(!handle) {
+		LOG_ERR("remove_default_rule(ERR):failed to invoke iptc_init");
+		return -1;
+	}
+	ret = iptc_delete_entry("POSTROUTING",entry,matchmask,handle);
+	if(!ret) {
+		LOG_ERR("remove_default_rule(ERR):",iptc_strerror(errno));
+		return -1;
+
+	}
+
+	ret = iptc_commit(handle);
+
+	if(!ret) {
+		LOG_ERR("rule_init(ERR): Commit, %s\n",iptc_strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
 
 int insert_rule(const char *table,
 		const char *chain,
@@ -140,7 +330,7 @@ int delete_rule(const char *table,
 	struct iptc_handle *handle;
 	int ret = 1;
 	uint32_t src = src_addr.s_addr;
-	uint32_t dst = src_addr.s_addr;
+	uint32_t dst = dst_addr.s_addr;
 
         struct ipt_entry *entry;
 	struct ipt_entry_match *match_proto; /*proto and l4port*/
@@ -148,6 +338,7 @@ int delete_rule(const char *table,
 	struct ipt_tcp *tcpinfo;
 	struct xt_DSCP_info *dscp_info; /*TODO: later*/
 	
+
 	uint32_t size_ipt_entry, size_ipt_entry_match, size_ipt_entry_target, size_ipt_tcp,size_ipt_dscp_info;
 	size_ipt_entry = IPT_ALIGN(sizeof(struct ipt_entry));
 	size_ipt_entry_match = IPT_ALIGN(sizeof(struct ipt_entry_match));
@@ -202,19 +393,25 @@ int delete_rule(const char *table,
 
 	dscp_info->dscp = dscp;
 	
+	unsigned char matchmask[TOTAL_SIZE]; // = (char*)malloc(entry->next_offset);
+	memset(matchmask,'\0',entry->next_offset);
 	
 	handle = iptc_init(table);
 	if(!handle) {
 		LOG_ERR("failed to invoke iptc_init");
 		return -1;
 	}
-	/*delete*/
-	ret = iptc_delete_entry(chain,entry,"",handle);
+	/*delete,It seems that matchmask is non-sense but the length is required*/
+	ret = iptc_delete_entry(chain,entry,matchmask,handle);
 	if(!ret) {
 		LOG_ERR("failed to delete rules");
 		return -1;
 
 	}
+	int i = 0;
+	//for(i=0;i<entry->next_offset; ++i) {
+	//		printf("%d ",(char)matchmask[i]);
+	//}
 
 	ret = iptc_commit(handle);
 

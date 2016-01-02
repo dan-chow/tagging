@@ -12,14 +12,6 @@
 #include <libnetfilter_conntrack/libnetfilter_conntrack_tcp.h>
 #include "iptc.h"
 
-#define TCP_PROTO  6
-#define LEVEL_1   (1024*1024)     //1MB
-#define LEVEL_2   (20*1024*1024)  //20MB
-
-#define DSCP_EF     46            //0x2e, This is the default tag
-#define DSCP_PHB    16            //0x10
-#define DSCP_BE     0             //0x00 Best-effor service
-
 
 /*I don't know why that I only get zero when directly get l4dst, so I temporially get it through __snprintf_proto
 //What a strang code
@@ -104,18 +96,18 @@ static int add_rule(struct HashNode *pnode, const struct Flow *f, uint8_t new_ta
 		/*previous tag is DSCP_EF(default)*/
 		/*add flow to hash table*/
 		if(insert_flow(f,0/*we care about no bytes*/,new_tag,time((time_t*)NULL)) == NULL) {
-			LOG_ERR("inserting flow error\n");
+			LOG_ERR("new flow: inserting flow error\n");
 			return -1;
 		}
 		/*insert iptables rule*/
 		if(INSERT_RULE(f->src, f->dst, new_tag, f->l4src,f->l4dst) != 0 ) {
-			LOG_ERR("inserting new rule error\n");
+			LOG_ERR("new flow: Inserting new rule error\n");
 			return -1;
 		}
 
 	}else if(new_tag != pnode->dscp) {
 		/*first, we need to delete previous one, and then add a new one*/
-		
+		//LOG_DEBUG("delete previous rule old_dscp = %d, new_tag=%d\n",pnode->dscp, new_tag);
 		if(DELETE_RULE(pnode->key.flow.src, pnode->key.flow.dst, pnode->dscp, pnode->key.flow.l4src, pnode->key.flow.l4dst) != 0) {
 			LOG_ERR("delete previous rule error\n");
 			return -1;
@@ -126,18 +118,19 @@ static int add_rule(struct HashNode *pnode, const struct Flow *f, uint8_t new_ta
 			LOG_ERR("inserting new rule error\n");
 			return -1;
 		}
-		update_flow(pnode,new_tag,0/*We don't care about the bytes*/, time((time_t*)NULL));/*must be succeed*/
 
 	}/*else new_tag == pnode->dscp, do nothing*/
 
+	/*update time*/
+	update_flow(pnode,new_tag,0/*We don't care about the bytes*/, time((time_t*)NULL));/*must be succeed*/
 
 	return 0;
 
 }
 
 
-const int interval = 5000; //every five seconds
-int conti = 1;
+const static int interval = 5000; //every five seconds
+static int conti = 1;
 
 void sig_term(int signo) {
 	if(signo == SIGTERM || signo == SIGINT) {
@@ -167,7 +160,7 @@ static void clean_up() {
 			break;
 	}
 
-
+	remove_default_rule();
 
 
 }
@@ -187,12 +180,14 @@ static int cb(enum nf_conntrack_msg_type type,
 
 	switch(state) {
 		case TCP_CONNTRACK_ESTABLISHED:
+		case TCP_CONNTRACK_CLOSE_WAIT:
+		case TCP_CONNTRACK_FIN_WAIT:
 			break;
 		default:
 			return NFCT_CB_CONTINUE;
 	};
 	
-	LOG_DEBUG("established tcp connections got!!\n");
+	//LOG_DEBUG("established tcp connections got!!\n");
 
 	struct in_addr orig_src = {.s_addr = get_orig_ipv4_src(ct)};
 	struct in_addr orig_dst = {.s_addr = get_orig_ipv4_dst(ct)};
@@ -208,7 +203,7 @@ static int cb(enum nf_conntrack_msg_type type,
 
 	uint64_t total_bytes = repl_bytes + orig_bytes;
 
-	LOG_DEBUG("got neccessary data\n");
+	//LOG_DEBUG("got neccessary data\n");
 	
 	struct Flow orig_flow  = {
 		.src = orig_src,
@@ -218,14 +213,17 @@ static int cb(enum nf_conntrack_msg_type type,
 		.l4dst = orig_l4dst,
 	};
 	struct HashNode *prev = lookup_flow(&orig_flow);
-
-	if(total_bytes < LEVEL_1) 
+	//LOG_DEBUG("DEBUG:lookup result = %p\n",prev);
+	if(total_bytes < LEVEL_1) {
 	        /*mice flow */
+		LOG_DEBUG("lower level_1 (%ld):",total_bytes);
+		printf_flow(&orig_flow);
 		return NFCT_CB_CONTINUE;
-
-	else if(total_bytes > LEVEL_2) {
+	}else if(total_bytes > LEVEL_2) {
 		/*  bytes > LEVEL_2 */
 		/*==NULL, unlikely*/
+		LOG_DEBUG("Over level_2 (%ld):",total_bytes);
+		printf_flow(&orig_flow);
 		if(add_rule(prev,&orig_flow,DSCP_BE) != 0) {
 
 			return NFCT_CB_STOP;
@@ -233,13 +231,14 @@ static int cb(enum nf_conntrack_msg_type type,
 	}else {
 		/*LEVEL_1 < bytes < LEVEL_2*/
 		/*==NULL, unlikely*/
+		LOG_DEBUG("between level_1 and level_2 (%ld):",total_bytes);
+		printf_flow(&orig_flow);
 		if(add_rule(prev,&orig_flow, DSCP_PHB) != 0) {
 
 			return NFCT_CB_STOP;
 		}
 	}
-	printf("orig flow:");
-	printf_flow(&orig_flow);
+	
 	//printf("reply flow:");
 	//printf_flow(&repl_flow);
 
@@ -333,25 +332,36 @@ int main(void) {
 	*/
 	
 	nfct_callback_register(h,NFCT_T_ALL,cb,NULL);
+
+	/*add default rule*/
+	if(rule_init() != 0 ) {
+		LOG_ERR("Failed to initialize rule \n");
+		conti = 0;
+	}
 	while(conti) {
 		start = time((time_t*)NULL);
-		LOG_DEBUG("start time=%d\n",start);
+		//LOG_DEBUG("start time=%d\n",start);
 		ret = nfct_query(h,NFCT_Q_DUMP,&family);
 		//ret = nfct_send(h,NFCT_Q_DUMP,a);//,NFCT_Q_DUMP,&family);
 		//ret = nfct_catch(h);//,NFCT_Q_DUMP,&family);
 
 		if (ret == -1) {
-			fprintf(stderr,"error ret==-1");
+			//fprintf(stderr,"error ret==-1");
 			LOG_ERR("(%d)(%s)\n",ret,strerror(errno));
 			break;
 		}
 		else
-		    LOG_DEBUG("OK\n");
+		    ;//LOG_DEBUG("OK\n");
 
 		/*here, store, lookup and modify rules
 		 * */
 		now = time((time_t*)NULL);
-		LOG_DEBUG("now time=%d\n",now);
+		//LOG_DEBUG("now time=%d\n",now);
+		if(remove_flows(128,20,now) < 0 ){
+			LOG_ERR("ERR: failed to remove flows");
+			conti = 0;
+		}
+		now = time((time_t*)NULL);
 		sleep((interval+start-now)/1000);
 
 		
