@@ -6,19 +6,31 @@
 
 #include "log.h"
 #include <libut/uthash.h>
+#include "iptc.h"
+
+#define TCP_PROTO  6
+#define LEVEL_1   (1024*1024)     //1MB
+#define LEVEL_2   (20*1024*1024)  //20MB
+
+#define DSCP_EF     46            //0x2e, This is the default tag
+#define DSCP_PHB    16            //0x10
+#define DSCP_BE     0             //0x00 Best-effor service
+
 struct Flow {
 	struct in_addr src;
 	struct in_addr dst;
 	uint16_t l4src;
 	uint16_t l4dst;
-	uint8_t proto;
+	uint8_t proto; //only tcp ,we ignore it
+};
+
+union HashKey {
+		struct HashNode *next;
+		struct Flow flow;//[FLOW_SIZE];
 };
 
 typedef struct HashNode {
-	union {
-		struct HashNode *next;
-		struct Flow flow;//[FLOW_SIZE];
-	}key;
+	union HashKey key;
 	uint64_t bytes;
 	time_t recent;
 	uint8_t dscp;

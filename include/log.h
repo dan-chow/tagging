@@ -8,7 +8,7 @@
 #define INFO 20
 #define DEBUG 10
 
-#define LOG_LEVEL DEBUG
+#define LOG_LEVEL INFO
 
 /*LOG:debug*/
 #if LOG_LEVEL <= DEBUG
@@ -25,8 +25,8 @@
 #endif
 
 /*LOG:error*/
-#if LOG_LEVEL<= ERROR
-#define LOG_ERR(format,args...) fprintf(stdout,format,##args)
+#if LOG_LEVEL <= ERROR
+#define LOG_ERR(format,args...) fprintf(stderr,format,##args)
 #else
 #define LOG_ERR(format,...) 
 #endif
