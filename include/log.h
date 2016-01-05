@@ -8,7 +8,7 @@
 #define INFO 20
 #define DEBUG 10
 
-#define LOG_LEVEL INFO
+#define LOG_LEVEL DEBUG
 
 /*LOG:debug*/
 #if LOG_LEVEL <= DEBUG
