@@ -1,11 +1,13 @@
 CC = gcc
 INCLUDEDIR = ../include
-LIBDIR = ../lib 
+LIBDIR += ../lib 
+CFLAGS+=-m32
 objects = iptc.o dump.o util.o
 LIBS = /usr/lib64/libnetfilter_conntrack.so /lib64/libiptc.so.0-1.4.7
 
 all:$(objects)
-	${CC} -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS}  $(objects) -o main
+	${CC} -I ${INCLUDEDIR}   -L ${LIBDIR} ${LIBS}  $(objects) -o start
+
 iptc.o:
 	$(CC) -c -I $(INCLUDEDIR) iptc.c -o iptc.o
 dump.o:
@@ -16,7 +18,7 @@ util.o:
 #all1:
 #	${CC} -I ${INCLUDEDIR} /usr/lib64/libnetfilter_conntrack.so /lib64/libiptc.so.0-1.4.7 -L ${LIBDIR} dump.c iptc.c -o dump
 debug:
-	${CC} -g -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS} iptc.c dump.c util.c -o main
+	${CC} -g -I ${INCLUDEDIR}  -L ${LIBDIR} ${LIBS} iptc.c dump.c util.c -o start
 
 
 test_hash:util.o
@@ -27,6 +29,6 @@ test_iptc:$(objects)
 	./iptc_test
 clean:
 	rm -f *.o
-	rm -f main
+	rm -f start
 	rm -f hash_test
 	rm -f iptc_test

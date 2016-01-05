@@ -13,6 +13,11 @@
 #include "iptc.h"
 
 
+
+#define NFNETLINK_NOT_SUPPORTED
+#ifdef NFNETLINK_NOT_SUPPORTED
+#include <object.h>
+#endif
 /*I don't know why that I only get zero when directly get l4dst, so I temporially get it through __snprintf_proto
 //What a strang code
 static void get_l4port_tcp(uint16_t *l4src, uint16_t *l4dst, const struct __nfct_tuple *tuple) {
@@ -44,45 +49,98 @@ inline static int is_established(const struct nf_conntrack* tuple) {
  * */
 /*port*/
 static inline uint16_t get_orig_l4src(const struct nf_conntrack*ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u16(ct,ATTR_ORIG_PORT_SRC);
+#else
+	return ct->head.orig.l4src.all;
+#endif
+
 }
 static inline uint16_t get_orig_l4dst(const struct nf_conntrack*ct) {
+
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u16(ct,ATTR_ORIG_PORT_DST);
+#else
+	return ct->head.orig.l4dst.all;
+#endif
+
 }
 static inline uint16_t get_repl_l4src(const struct nf_conntrack*ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u16(ct,ATTR_REPL_PORT_SRC);
+#else
+	return ct->repl.l4src.all;
+#endif
+
 }
 static inline uint16_t get_repl_l4dst(const struct nf_conntrack*ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u16(ct,ATTR_REPL_PORT_DST);
+#else
+	return ct->repl.l4dst.all;
+#endif
 }
 /*address*/
 static inline uint32_t get_orig_ipv4_src(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u32(ct,ATTR_ORIG_IPV4_SRC);
+#else
+	return ct->head.orig.src.v4;
+#endif
 }
 static inline uint32_t get_orig_ipv4_dst(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u32(ct,ATTR_ORIG_IPV4_DST);
+#else
+	return ct->head.orig.dst.v4;
+#endif
 }
 static inline uint32_t get_repl_ipv4_src(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u32(ct,ATTR_REPL_IPV4_SRC);
+#else
+	return ct->repl.src.v4;
+#endif
 }
 static inline uint32_t get_repl_ipv4_dst(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u32(ct,ATTR_REPL_IPV4_DST);
+#else
+	return ct->repl.dst.v4;
+#endif
 }
 /*state*/
 static inline uint8_t get_tcp_state(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u8(ct,ATTR_TCP_STATE);
+#else
+	return ct->protoinfo.tcp.state;
+#endif
 }
 
 /*L4 proto*/
 static inline uint8_t get_l4proto(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u8(ct,ATTR_L4PROTO);
+#else
+	return ct->head.orig.protonum;
+#endif
 }
 /*Bytes*/
 static inline uint64_t get_orig_bytes(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u64(ct,ATTR_ORIG_COUNTER_BYTES);
+#else 
+	return ct->counters[__DIR_ORIG].bytes;
+#endif
 }
 static inline uint64_t get_repl_bytes(const struct nf_conntrack *ct) {
+#ifndef NFNETLINK_NOT_SUPPORTED
 	return nfct_get_attr_u64(ct,ATTR_REPL_COUNTER_BYTES);
+#else
+	return ct->counters[__DIR_REPL].bytes;
+#endif
+
 }
 
 /*before add rule, we must remove previous rules installed*/
@@ -128,6 +186,7 @@ static int add_rule(struct HashNode *pnode, const struct Flow *f, uint8_t new_ta
 
 }
 
+static struct in_addr gw_ip = {0};
 
 const static int interval = 5000; //every five seconds
 static int conti = 1;
@@ -171,7 +230,8 @@ static int cb(enum nf_conntrack_msg_type type,
 		void *data
 	    ) {
 	char buf[1024];
-	//LOG_DEBUG("begin in cb\n");
+	//printf("msg_type==%d, %d\n",type, NFCT_T_UPDATE);
+	//printf("l3proto = %u,l4proto = %u\n ",nfct_get_attr_u8(ct,ATTR_L3PROTO),get_l4proto(ct));
 	uint8_t proto = get_l4proto(ct);
 	uint8_t state = get_tcp_state(ct);
 	/*only attention to established TCP connections*/
@@ -204,6 +264,12 @@ static int cb(enum nf_conntrack_msg_type type,
 	uint64_t total_bytes = repl_bytes + orig_bytes;
 
 	//LOG_DEBUG("got neccessary data\n");
+	//just care about the traffic of which the source is gateway ip
+	
+	if(gw_ip.s_addr != 0 && gw_ip.s_addr != orig_src.s_addr) {
+		LOG_DEBUG("check between gw_ip and orig_src\n");
+		return NFCT_CB_CONTINUE;
+	}
 	
 	struct Flow orig_flow  = {
 		.src = orig_src,
@@ -216,13 +282,13 @@ static int cb(enum nf_conntrack_msg_type type,
 	//LOG_DEBUG("DEBUG:lookup result = %p\n",prev);
 	if(total_bytes < LEVEL_1) {
 	        /*mice flow */
-		LOG_DEBUG("lower level_1 (%ld):",total_bytes);
+		LOG_INFO("lower level_1 (%ld):",total_bytes);
 		printf_flow(&orig_flow);
 		return NFCT_CB_CONTINUE;
 	}else if(total_bytes > LEVEL_2) {
 		/*  bytes > LEVEL_2 */
 		/*==NULL, unlikely*/
-		LOG_DEBUG("Over level_2 (%ld):",total_bytes);
+		LOG_INFO("Over level_2 (%ld):",total_bytes);
 		printf_flow(&orig_flow);
 		if(add_rule(prev,&orig_flow,DSCP_BE) != 0) {
 
@@ -231,7 +297,7 @@ static int cb(enum nf_conntrack_msg_type type,
 	}else {
 		/*LEVEL_1 < bytes < LEVEL_2*/
 		/*==NULL, unlikely*/
-		LOG_DEBUG("between level_1 and level_2 (%ld):",total_bytes);
+		LOG_INFO("between level_1 and level_2 (%ld):",total_bytes);
 		printf_flow(&orig_flow);
 		if(add_rule(prev,&orig_flow, DSCP_PHB) != 0) {
 
@@ -291,8 +357,287 @@ struct nfct_filter* create_own_filter() {
         return filter;
 
 }
+/*system bits*/
+#define M64
+#ifdef M32
+#define STR_TO_UINT64(p) strtoull(p,NULL,10)
+#endif
 
-int main(void) {
+#ifdef M64
+
+#define STR_TO_UINT64(p) strtoul(p,NULL,10)
+#endif
+
+
+#ifdef NFNETLINK_NOT_SUPPORTED
+
+#define L3PROTO_POS     1
+#define L4PROTO_POS     3
+#define L4STATE_POS     5
+
+#define SRC     "src="    
+#define DST     "dst="
+#define L4SRC   "sport="
+#define L4DST   "dport="
+#define BYTE    "bytes="
+#define PACKET  "packets="
+
+#define ADDR_OFFSET     4
+#define L4_OFFSET       6
+#define BYTE_OFFSET     6
+#define PACKET_OFFSET  8
+
+
+#define FLOW_START_LABEL "src="
+
+#define ESTABLISHED "ESTABLISHED"
+#define CLOSE_WAIT  "CLOSE_WAIT"
+#define FIN_WAIT    "FIN_WAIT"
+
+char *process_layers(struct nf_conntrack *ct, char *p, const char *sep) {
+	int i = 0;
+	while(strstr(p,FLOW_START_LABEL) == NULL) {
+		LOG_DEBUG("the %d-th, split string = %s\n",i,p);
+		if( L3PROTO_POS == i) {
+			ct->head.orig.l3protonum = atoi(p);
+			LOG_DEBUG("l3protonum = %d\n",ct->head.orig.l3protonum);
+		}else if(L4PROTO_POS == i) {
+			ct->head.orig.protonum = atoi(p);
+			LOG_DEBUG("protonum = %d\n",ct->head.orig.protonum);
+
+		}else if(L4STATE_POS == i && ct->head.orig.protonum == TCP_PROTO) {
+			if(strcmp(p, ESTABLISHED) == 0) {
+				ct->protoinfo.tcp.state = TCP_CONNTRACK_ESTABLISHED;
+			}else if(strcmp(p,CLOSE_WAIT) == 0) {
+				ct->protoinfo.tcp.state = TCP_CONNTRACK_CLOSE_WAIT;
+			}else if(strcmp(p,FIN_WAIT) == 0 ){
+				ct->protoinfo.tcp.state = TCP_CONNTRACK_FIN_WAIT;	
+			}else 
+				ct->protoinfo.tcp.state = 0; //I don't care others
+
+			LOG_DEBUG("protoinfo.tcp.state = %d\n",ct->protoinfo.tcp.state);
+		}
+		p = strtok(NULL,sep);
+
+		++i;
+	}
+
+	return p;
+}
+/*p = "src=..."*/
+char *process_orig(struct nf_conntrack *ct, char *p, const char *sep) {
+	
+	char *tmp = p + ADDR_OFFSET;
+	struct in_addr addr;
+	/*src address*/
+	if(strstr(p,SRC) == NULL || inet_aton(tmp,&addr) == 0) {
+		ct->head.orig.src.v4 = 0;
+	}else {
+		ct->head.orig.src.v4 = addr.s_addr;
+		p = strtok(NULL,sep);
+		LOG_DEBUG("orig-src = %s\n",inet_ntoa(addr));
+	}
+	
+	tmp = p + ADDR_OFFSET;
+	if(strstr(p,DST) == NULL || inet_aton(tmp,&addr) == 0) {
+		ct->head.orig.dst.v4 = 0;
+	}else {
+		ct->head.orig.dst.v4 = addr.s_addr;
+		p = strtok(NULL,sep);
+		LOG_DEBUG("orig-dst = %s\n",inet_ntoa(addr));
+	}
+
+	tmp = p + L4_OFFSET;
+	if(strstr(p,L4SRC) == NULL) {
+		ct->head.orig.l4src.all = 0;
+	}else {
+		ct->head.orig.l4src.all = htons((short)atoi(tmp));
+		LOG_DEBUG("l4src string = %s\n",tmp);
+		LOG_DEBUG("orig-l4src = %d\n",ntohs(ct->head.orig.l4src.all));
+		p = strtok(NULL,sep);
+	}
+
+	tmp = p + L4_OFFSET;
+	if(strstr(p,L4DST) == NULL) {
+		ct->head.orig.l4dst.all = 0;
+	}else {
+		ct->head.orig.l4dst.all = htons((short)atoi(tmp));
+		LOG_DEBUG("l4dst string = %s\n",tmp);
+		LOG_DEBUG("orig-l4dst = %d\n",ntohs(ct->head.orig.l4dst.all));
+		p = strtok(NULL,sep);
+	}
+	
+	tmp = p + PACKET_OFFSET;
+	if(strstr(p,PACKET) == NULL) {
+		ct->counters[__DIR_ORIG].packets = 0;
+	}else {
+		LOG_DEBUG("packets=%s\n",tmp);
+		ct->counters[__DIR_ORIG].packets = STR_TO_UINT64(tmp);//atoi(tmp);
+		p = strtok(NULL,sep);
+		LOG_DEBUG("orig-packets = %ld\n",ct->counters[__DIR_ORIG].packets);
+	}
+	
+	tmp = p + BYTE_OFFSET;
+	if(strstr(p,BYTE) == NULL) {
+		ct->counters[__DIR_ORIG].bytes = 0;
+	}else {
+		LOG_DEBUG("bytes=%s\n",tmp);
+		ct->counters[__DIR_ORIG].bytes = STR_TO_UINT64(tmp);//atoi(tmp); 
+		p = strtok(NULL,sep);
+		LOG_DEBUG("orig-bytes = %ld\n",ct->counters[__DIR_ORIG].bytes);
+	}	
+	/* attention: strtoull, convert string to unsigned long long: as the platform of my router is 32bit*/
+
+	
+	LOG_DEBUG("end orig = %s\n",p);
+
+
+	return p;
+}
+char *process_repl(struct nf_conntrack *ct, char *p,const  char *sep) {
+	char *tmp = p + ADDR_OFFSET;
+	struct in_addr addr;
+	/*src address*/
+	if(strstr(p,SRC) == NULL || inet_aton(tmp,&addr) == 0) {
+		ct->repl.src.v4 = 0;
+	}else {
+		ct->repl.src.v4 = addr.s_addr;
+		p = strtok(NULL,sep);
+		LOG_DEBUG("repl-src = %s\n",inet_ntoa(addr));
+	}
+
+	tmp = p + ADDR_OFFSET;
+	if(strstr(p,DST) == NULL || inet_aton(tmp,&addr) == 0) {
+		ct->repl.dst.v4 = 0;
+	}else {
+		ct->repl.dst.v4 = addr.s_addr;
+		p = strtok(NULL,sep);
+		LOG_DEBUG("repl-dst = %s\n",inet_ntoa(addr));
+	}
+
+	tmp = p + L4_OFFSET;
+	if(strstr(p,L4SRC) == NULL) {
+		ct->repl.l4src.all = 0;
+	}else {
+		ct->repl.l4src.all = htons((short)atoi(tmp));
+		p = strtok(NULL,sep);
+		LOG_DEBUG("l4src string = %s\n",tmp);
+		LOG_DEBUG("repl-l4src = %d\n",htons(ct->repl.l4src.all));
+	}
+
+	tmp = p + L4_OFFSET;
+	if(strstr(p,L4DST) == NULL) {
+		ct->repl.l4dst.all = 0;
+	}else {
+		ct->repl.l4dst.all = htons((short)atoi(tmp));
+		p = strtok(NULL,sep);
+		LOG_DEBUG("l4dst string = %s\n",tmp);
+		LOG_DEBUG("repl-l4dst = %d\n",ntohs(ct->repl.l4src.all));
+	}
+	
+	tmp = p + PACKET_OFFSET;
+	if(strstr(p,PACKET) == NULL) {
+		ct->counters[__DIR_REPL].packets = 0;
+	}else {
+		ct->counters[__DIR_REPL].packets = STR_TO_UINT64(tmp);//atoi(tmp);
+		p = strtok(NULL,sep);
+		LOG_DEBUG("repl-packets = %ld\n",ct->counters[__DIR_REPL].packets);
+
+	}
+	
+	tmp = p + BYTE_OFFSET;
+	if(strstr(p,BYTE) == NULL) {
+		ct->counters[__DIR_REPL].bytes = 0;
+	}else {
+		ct->counters[__DIR_REPL].bytes = STR_TO_UINT64(tmp);//atoi(tmp); 
+		p = strtok(NULL,sep);
+		LOG_DEBUG("repl-packets = %ld\n",ct->counters[__DIR_REPL].bytes);
+	}
+	/* attention: strtoull, convert string to unsigned long long: as the platform of my router is 32bit*/
+
+
+	return p;
+
+
+}
+
+
+
+/*
+		case TCP_CONNTRACK_ESTABLISHED:
+		case TCP_CONNTRACK_CLOSE_WAIT:
+		case TCP_CONNTRACK_FIN_WAIT:
+*/
+/*return value: -1 process failed; 0 return success; 1 protocol not concered;
+ * */
+int process_line(struct nf_conntrack *ct, char *str) {
+	const char *sep = " ";
+	char *p;
+	int i = 0;
+
+	if (ct == NULL || str == NULL)
+		return -1;
+
+	memset(ct,'\0',sizeof(struct nf_conntrack));
+
+	p = strtok(str,sep);
+	if(p)
+		p = process_layers(ct,p,sep);
+	
+	/*FIND src=*.*.*.*  */
+	while(p) {
+
+		if(strstr(p,"src") != NULL)
+			break;
+		//else
+		p = strtok(NULL,sep);
+	}
+
+	if(p)
+		p = process_orig(ct,p,sep);
+
+	/*FIND src=*.*.*.*  */
+	while(p) {
+
+		if(strstr(p,"src") != NULL)
+			break;
+		//else
+		p = strtok(NULL,sep);
+	}
+	
+	if(p)
+		p = process_repl(ct,p,sep);
+
+	return 0; //success 
+	
+
+}
+
+#define FILENAME "/proc/net/nf_conntrack"
+static int nfnetlink_not_supported(int(*p_callback)(enum nf_conntrack_msg_type type, struct nf_conntrack *ct, void*data)) {
+	struct nf_conntrack ct;
+	char buf[512];
+	FILE *f = fopen(FILENAME,"r");
+	if(f==NULL)
+		return -1; 
+	while(1) {
+		fgets(buf,1024,f);
+		
+		if(feof(f))
+			break;
+		LOG_INFO("%s",buf);
+		printf("result=%d\n",process_line(&ct,buf));
+		cb(0,&ct,NULL);
+			
+	}
+	fclose(f);
+	return 0;
+
+}
+
+#endif
+
+int main(int argc, char *argv[]) {
 	int ret;
 	u_int32_t family = AF_INET;
 	struct nfct_handle *h;
@@ -306,7 +651,12 @@ int main(void) {
 		LOG_ERR("register a signal function error\n");
 		return -1;
 	}
+	if(argc < 2 || inet_aton(argv[1],&gw_ip) == 0) 
+		gw_ip.s_addr = 0;
+	
+	init();
 
+#ifndef NFNETLINK_NOT_SUPPORTED
 	h = nfct_open(CONNTRACK,0);
 	//h = nfct_open(CONNTRACK,NF_NETLINK_CONNTRACK_NEW|NF_NETLINK_CONNTRACK_UPDATE);
 	if(!h) {
@@ -314,25 +664,10 @@ int main(void) {
 		return -1;
 	}
 	/*inital buffers*/
-	init();
-	//Filter dosen't work, I don't know why. So I leave it alone temporially.
-	/*
-	struct nfct_filter *filter = create_own_filter();
-	if(!filter) {
-		perror("create filter");
-		return -1;
-	}
-	if(nfct_filter_attach(nfct_fd(h),filter) == -1) {
-		perror("nfct_filter_attach");
-		return 0;
-	}
-	
-	printf("after attach\n");
-	//nfct_filter_destroy(filter);
-	*/
 	
 	nfct_callback_register(h,NFCT_T_ALL,cb,NULL);
 
+#endif
 	/*add default rule*/
 	if(rule_init() != 0 ) {
 		LOG_ERR("Failed to initialize rule \n");
@@ -340,18 +675,25 @@ int main(void) {
 	}
 	while(conti) {
 		start = time((time_t*)NULL);
+#ifndef NFNETLINK_NOT_SUPPORTED
 		//LOG_DEBUG("start time=%d\n",start);
+		//LOG_DEBUG("before query\n");
 		ret = nfct_query(h,NFCT_Q_DUMP,&family);
 		//ret = nfct_send(h,NFCT_Q_DUMP,a);//,NFCT_Q_DUMP,&family);
 		//ret = nfct_catch(h);//,NFCT_Q_DUMP,&family);
+		LOG_DEBUG("after query\n");
+#else
+		ret = nfnetlink_not_supported(cb);
+		
 
+#endif
 		if (ret == -1) {
 			//fprintf(stderr,"error ret==-1");
 			LOG_ERR("(%d)(%s)\n",ret,strerror(errno));
 			break;
 		}
 		else
-		    ;//LOG_DEBUG("OK\n");
+		    LOG_DEBUG("OK;start=%d\n",start);
 
 		/*here, store, lookup and modify rules
 		 * */

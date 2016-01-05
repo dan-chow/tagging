@@ -178,7 +178,7 @@ void printf_flow(struct Flow *flow) {
 
 	char src_buf[16];
 	snprintf(src_buf,16,"%d.%d.%d.%d",(int)(flow->src.s_addr&0xFF),(int)((flow->src.s_addr&0xFF00)>>8),(int)((flow->src.s_addr&0xFF0000)>>16),(int)((flow->src.s_addr&0xFF000000)>>24));
-	LOG_DEBUG("Flow:srcIP=%s,dstIP=%s, l4src=%d, l4dst=%d, tcp\n",src_buf,
+	LOG_INFO("Flow:srcIP=%s,dstIP=%s, l4src=%d, l4dst=%d, tcp\n",src_buf,
 					inet_ntoa(flow->dst),htons(flow->l4src),htons(flow->l4dst));
 }
 
